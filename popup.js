@@ -223,7 +223,7 @@ function renderBarList(items) {
   return `<div class="bar-list">
     ${items.map(({ name, count }) => `
       <div class="bar-item">
-        <div class="bar-label" title="${name}">${name}</div>
+        <div class="bar-label" title="${escapeHtml(name)}">${escapeHtml(name)}</div>
         <div class="bar-track">
           <div class="bar-fill" style="width:${Math.round(count/max*100)}%"></div>
         </div>
@@ -317,11 +317,11 @@ function filterAndRenderHistory(query) {
     return `<div class="history-item">
       <div>
         <div class="hi-datetime">${dt}</div>
-        <div class="hi-lesson">${r.lesson_type || r.lesson_lang || '—'}</div>
+        <div class="hi-lesson">${escapeHtml(r.lesson_type || r.lesson_lang) || '—'}</div>
       </div>
       <div>
-        <div class="hi-teacher">${r.teacher_en || '—'}</div>
-        <div class="hi-country">${r.teacher_country || ''}</div>
+        <div class="hi-teacher">${escapeHtml(r.teacher_en) || '—'}</div>
+        <div class="hi-country">${escapeHtml(r.teacher_country)}</div>
       </div>
       <div class="hi-duration">${dur}</div>
     </div>`;
@@ -357,6 +357,15 @@ document.getElementById('btnClear').addEventListener('click', async () => {
 // ============================================================
 // ユーティリティ
 // ============================================================
+function escapeHtml(str) {
+  if (str == null) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
 function sendMsg(msg) {
   return new Promise((resolve, reject) => {
     chrome.runtime.sendMessage(msg, res => {

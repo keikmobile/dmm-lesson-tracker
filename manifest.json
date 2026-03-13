@@ -5,6 +5,9 @@
   "description": "DMM英会話のレッスン履歴を収集・分析するChrome拡張機能",
   "permissions": ["storage"],
   "host_permissions": ["https://eikaiwa.dmm.com/lesson/*"],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'"
+  },
   "background": {
     "service_worker": "background.js"
   },
