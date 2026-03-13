@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DMM英会話 Lesson Tracker</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, 'Helvetica Neue', Arial, sans-serif;
+      font-size: 13px;
+      color: #222;
+      background: #f7f7f7;
+      width: 420px;
+      min-height: 300px;
+    }
+
+    /* ヘッダー */
+    .app-header {
+      background: #d62b2b;
+      color: white;
+      padding: 12px 16px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .app-header h1 { font-size: 15px; font-weight: 700; letter-spacing: 0.3px; }
+    .app-header .subtitle { font-size: 11px; opacity: 0.85; }
+
+    /* タブ */
+    .tabs {
+      display: flex;
+      background: #fff;
+      border-bottom: 2px solid #e0e0e0;
+    }
+    .tab-btn {
+      flex: 1;
+      padding: 9px 4px;
+      border: none;
+      background: none;
+      cursor: pointer;
+      font-size: 12px;
+      color: #666;
+      transition: all 0.15s;
+    }
+    .tab-btn.active {
+      color: #d62b2b;
+      border-bottom: 2px solid #d62b2b;
+      margin-bottom: -2px;
+      font-weight: 600;
+    }
+    .tab-btn:hover:not(.active) { background: #f5f5f5; }
+
+    /* タブパネル */
+    .tab-panel { display: none; padding: 14px 16px; }
+    .tab-panel.active { display: block; }
+
+    /* 取得タブ */
+    .field-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+    .field-row label { font-size: 12px; color: #555; min-width: 80px; }
+    .field-row select, .field-row input {
+      flex: 1;
+      padding: 6px 8px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      font-size: 12px;
+      background: white;
+    }
+
+    .btn {
+      display: inline-block;
+      padding: 8px 16px;
+      border-radius: 4px;
+      border: none;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 600;
+      transition: opacity 0.15s;
+    }
+    .btn:hover { opacity: 0.85; }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-primary { background: #d62b2b; color: white; }
+    .btn-secondary { background: #555; color: white; }
+    .btn-danger { background: #c0392b; color: white; }
+    .btn-outline { background: white; color: #555; border: 1px solid #ccc; }
+    .btn-sm { padding: 5px 10px; font-size: 11px; }
+
+    .btn-row { display: flex; gap: 8px; margin-top: 12px; }
+
+    /* プログレス */
+    .progress-wrap { margin-top: 12px; display: none; }
+    .progress-wrap.show { display: block; }
+    .progress-bar-track {
+      width: 100%; height: 6px;
+      background: #e0e0e0; border-radius: 3px; overflow: hidden;
+    }
+    .progress-bar-fill {
+      height: 100%; background: #d62b2b;
+      width: 0%; transition: width 0.3s;
+    }
+    .progress-text { font-size: 11px; color: #888; margin-top: 4px; }
+
+    /* ステータス/警告 */
+    .status-box {
+      margin-top: 10px;
+      padding: 8px 10px;
+      border-radius: 4px;
+      font-size: 12px;
+      display: none;
+    }
+    .status-box.show { display: block; }
+    .status-box.info { background: #e8f4fd; color: #1a6fa0; border: 1px solid #b8d9f0; }
+    .status-box.success { background: #eafaf1; color: #1a6e40; border: 1px solid #a9dfbf; }
+    .status-box.warning { background: #fef9e7; color: #7d6608; border: 1px solid #f9e79f; }
+    .status-box.error { background: #fdf2f2; color: #922b21; border: 1px solid #f1948a; }
+    .warning-list { margin-top: 4px; max-height: 80px; overflow-y: auto; }
+    .warning-list li { font-size: 11px; margin-left: 12px; margin-top: 2px; }
+
+    /* インポート */
+    .import-zone {
+      border: 2px dashed #ccc;
+      border-radius: 6px;
+      padding: 16px;
+      text-align: center;
+      color: #999;
+      cursor: pointer;
+      transition: border-color 0.15s;
+      margin-top: 4px;
+    }
+    .import-zone:hover { border-color: #d62b2b; color: #d62b2b; }
+    .import-zone.drag-over { border-color: #d62b2b; background: #fdf2f2; }
+    #importFileInput { display: none; }
+    .oldest-month-note {
+      font-size: 11px; color: #aaa; margin-top: -4px; margin-bottom: 4px;
+      padding-left: 88px;
+    }
+
+    /* 分析タブ */
+    .stat-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-bottom: 14px;
+    }
+    .stat-card {
+      background: white;
+      border-radius: 6px;
+      padding: 10px 12px;
+      border: 1px solid #e8e8e8;
+    }
+    .stat-card .label { font-size: 11px; color: #888; }
+    .stat-card .value { font-size: 18px; font-weight: 700; color: #d62b2b; margin-top: 2px; }
+    .stat-card .unit { font-size: 11px; color: #888; }
+
+    .chart-section { margin-bottom: 14px; }
+    .chart-section h3 { font-size: 12px; color: #555; font-weight: 600; margin-bottom: 8px; }
+
+    /* バーチャート */
+    .bar-list { display: flex; flex-direction: column; gap: 4px; }
+    .bar-item { display: flex; align-items: center; gap: 6px; }
+    .bar-label { font-size: 11px; color: #444; min-width: 100px; max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .bar-track { flex: 1; height: 12px; background: #f0f0f0; border-radius: 2px; overflow: hidden; }
+    .bar-fill { height: 100%; background: #d62b2b; border-radius: 2px; transition: width 0.4s; }
+    .bar-count { font-size: 11px; color: #888; min-width: 28px; text-align: right; }
+
+    /* 時間帯 */
+    .timeslot-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+    .timeslot-card {
+      text-align: center; padding: 8px;
+      background: white; border-radius: 6px; border: 1px solid #e8e8e8;
+    }
+    .timeslot-card .ts-label { font-size: 12px; color: #555; }
+    .timeslot-card .ts-count { font-size: 16px; font-weight: 700; color: #d62b2b; }
+    .timeslot-card .ts-pct { font-size: 10px; color: #aaa; }
+
+    /* 月別推移 */
+    #monthlyChart { width: 100%; height: 80px; }
+
+    /* 履歴タブ */
+    .history-toolbar {
+      display: flex; gap: 6px; margin-bottom: 10px; align-items: center;
+    }
+    .history-toolbar input {
+      flex: 1; padding: 5px 8px;
+      border: 1px solid #ccc; border-radius: 4px; font-size: 12px;
+    }
+    .history-list {
+      max-height: 320px; overflow-y: auto;
+      border: 1px solid #e8e8e8; border-radius: 4px; background: white;
+    }
+    .history-item {
+      padding: 8px 10px;
+      border-bottom: 1px solid #f0f0f0;
+      display: grid;
+      grid-template-columns: 130px 1fr auto;
+      gap: 6px;
+      align-items: start;
+      font-size: 12px;
+    }
+    .history-item:last-child { border-bottom: none; }
+    .history-item:hover { background: #fafafa; }
+    .hi-datetime { color: #555; font-size: 11px; }
+    .hi-teacher { font-weight: 600; color: #333; }
+    .hi-country { font-size: 10px; color: #aaa; }
+    .hi-lesson { color: #666; font-size: 11px; }
+    .hi-duration { color: #d62b2b; font-size: 11px; white-space: nowrap; }
+    .empty-state { text-align: center; padding: 30px; color: #aaa; font-size: 13px; }
+    .last-scraped { font-size: 11px; color: #aaa; margin-top: 8px; }
+  </style>
+</head>
+<body>
+  <div class="app-header">
+    <div>
+      <h1>📚 DMM英会話 Lesson Tracker</h1>
+      <div class="subtitle">レッスン履歴を収集・分析</div>
+    </div>
+  </div>
+
+  <div class="tabs">
+    <button class="tab-btn active" data-tab="scrape">取得</button>
+    <button class="tab-btn" data-tab="analyze">分析</button>
+    <button class="tab-btn" data-tab="history">履歴</button>
+  </div>
+
+  <!-- ============ 取得タブ ============ -->
+  <div class="tab-panel active" id="panel-scrape">
+    <div class="field-row">
+      <label>取得開始月</label>
+      <select id="fromMonth"></select>
+    </div>
+    <div class="field-row">
+      <label>取得終了月</label>
+      <select id="toMonth"></select>
+    </div>
+    <div class="oldest-month-note" id="oldestMonthNote"></div>
+
+    <div class="btn-row">
+      <button class="btn btn-primary" id="btnScrape">履歴を取得</button>
+    </div>
+
+    <div class="progress-wrap" id="progressWrap">
+      <div class="progress-bar-track">
+        <div class="progress-bar-fill" id="progressFill"></div>
+      </div>
+      <div class="progress-text" id="progressText">取得中...</div>
+    </div>
+
+    <div class="status-box" id="statusBox"></div>
+
+    <hr style="margin: 14px 0; border: none; border-top: 1px solid #e8e8e8;">
+
+    <div style="font-size: 12px; color: #555; margin-bottom: 6px;">JSONインポート</div>
+    <div class="import-zone" id="importZone">
+      クリックまたはファイルをドロップ<br>
+      <span style="font-size: 11px; color: #bbb;">dmm-history-*.json</span>
+    </div>
+    <input type="file" id="importFileInput" accept=".json">
+
+    <div class="last-scraped" id="lastScraped"></div>
+  </div>
+
+  <!-- ============ 分析タブ ============ -->
+  <div class="tab-panel" id="panel-analyze">
+    <div id="analyzeContent">
+      <div class="empty-state">まずデータを取得してください</div>
+    </div>
+  </div>
+
+  <!-- ============ 履歴タブ ============ -->
+  <div class="tab-panel" id="panel-history">
+    <div class="history-toolbar">
+      <input type="text" id="searchInput" placeholder="講師名・レッスン種別で検索...">
+      <button class="btn btn-outline btn-sm" id="btnExport">JSONエクスポート</button>
+      <button class="btn btn-danger btn-sm" id="btnClear">消去</button>
+    </div>
+    <div class="history-list" id="historyList">
+      <div class="empty-state">データがありません</div>
+    </div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
