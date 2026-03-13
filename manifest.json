@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "description": "DMM英会話のレッスン履歴を収集・分析するChrome拡張機能",
   "permissions": ["storage"],
-  "host_permissions": ["https://eikaiwa.dmm.com/*"],
+  "host_permissions": ["https://eikaiwa.dmm.com/lesson/*"],
   "background": {
     "service_worker": "background.js"
   },
