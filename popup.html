@@ -209,6 +209,20 @@
     .hi-country { font-size: 10px; color: #aaa; }
     .hi-lesson { color: #666; font-size: 11px; }
     .hi-duration { color: #d62b2b; font-size: 11px; white-space: nowrap; }
+    .hi-material { color: #888; font-size: 10px; font-style: italic; margin-top: 1px; }
+    .hi-material-link { color: #aaa; font-size: 10px; margin-top: 1px; }
+    .hi-material-link a { color: #aaa; text-decoration: underline; }
+    .hi-material-link a:hover { color: #d62b2b; }
+    .hi-note { margin-top: 2px; }
+    .hi-note a { color: #aaa; font-size: 10px; text-decoration: underline; }
+    .hi-note a:hover { color: #d62b2b; }
+    .batch-toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+    .batch-progress { font-size: 11px; color: #888; }
+    .btn-outline.active { background: #555; color: white; border-color: #555; }
+    .hi-unavailable { color: #bbb; font-size: 10px; margin-top: 1px; }
+    .btn-unavailable, .btn-undo { background: none; border: none; cursor: pointer; font-size: 10px; color: #bbb; padding: 0 2px; }
+    .btn-unavailable:hover { color: #c0392b; }
+    .btn-undo:hover { color: #27ae60; }
     .empty-state { text-align: center; padding: 30px; color: #aaa; font-size: 13px; }
     .last-scraped { font-size: 11px; color: #aaa; margin-top: 8px; }
   </style>
@@ -278,6 +292,13 @@
       <button class="btn btn-outline btn-sm" id="btnExport">JSONエクスポート</button>
       <button class="btn btn-danger btn-sm" id="btnClear">消去</button>
     </div>
+    <div class="batch-toolbar">
+      <button class="btn btn-secondary btn-sm" id="btnBatch">教材名を一括取得</button>
+      <button class="btn btn-outline btn-sm" id="btnFilterNoMaterial">未取得</button>
+      <button class="btn btn-outline btn-sm" id="btnFilterUnavailable">取得不可</button>
+      <span class="batch-progress" id="batchProgress"></span>
+    </div>
+    <div id="materialStats" style="font-size:11px;color:#888;margin-bottom:6px;"></div>
     <div class="history-list" id="historyList">
       <div class="empty-state">データがありません</div>
     </div>
