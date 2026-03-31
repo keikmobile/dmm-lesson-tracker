@@ -7,6 +7,15 @@ chrome.runtime.onMessage.addListener((msg) => {
   if (msg.type === 'SCRAPE_PROGRESS') {
     progressText.textContent = `${formatMonth(msg.month)} 取得中...`;
   }
+  if (msg.type === 'BATCH_PROGRESS') {
+    const el = document.getElementById('batchProgress');
+    if (el) el.textContent = `取得中: ${msg.done}/${msg.total}`;
+    if (msg.done === msg.total) {
+      const btn = document.getElementById('btnBatch');
+      if (btn) btn.textContent = '教材名を一括取得';
+      renderHistory();
+    }
+  }
 });
 
 // ---- タブ切り替え ----
@@ -209,6 +218,11 @@ async function renderAnalyze() {
     </div>
 
     <div class="chart-section">
+      <h3>📚 教材 TOP15 <span style="font-weight:normal;color:#aaa;">(取得済み ${s.materialTotal}件)</span></h3>
+      ${renderBarList(s.materialRank)}
+    </div>
+
+    <div class="chart-section">
       <h3>📅 月別推移</h3>
       <canvas id="monthlyChart"></canvas>
     </div>
@@ -283,6 +297,16 @@ async function renderHistory() {
   const res = await sendMsg({ type: 'GET_HISTORY' });
   if (!res.ok) return;
   allRecords = res.records || [];
+
+  const total = allRecords.length;
+  const withMaterial = allRecords.filter(r => r.material_title).length;
+  const unavailable = allRecords.filter(r => r.material_unavailable).length;
+  const pending = allRecords.filter(r => !r.material_title && !r.material_unavailable).length;
+  const statsEl = document.getElementById('materialStats');
+  if (statsEl) {
+    statsEl.textContent = `教材取得済み: ${withMaterial} / 未取得: ${pending} / 取得不可: ${unavailable}  (全${total}件)`;
+  }
+
   filterAndRenderHistory(document.getElementById('searchInput').value);
   if (res.lastScraped) {
     const d = new Date(res.lastScraped);
@@ -290,20 +314,42 @@ async function renderHistory() {
   }
 }
 
+// 0: 全件, 1: 未取得のみ, 2: 取得不可のみ
+let materialFilter = 0;
+
 document.getElementById('searchInput').addEventListener('input', e => {
   filterAndRenderHistory(e.target.value);
 });
 
+document.getElementById('btnFilterNoMaterial').addEventListener('click', () => {
+  materialFilter = materialFilter === 1 ? 0 : 1;
+  document.getElementById('btnFilterNoMaterial').classList.toggle('active', materialFilter === 1);
+  document.getElementById('btnFilterUnavailable').classList.remove('active');
+  if (materialFilter !== 2) materialFilter = materialFilter === 1 ? 1 : 0;
+  filterAndRenderHistory(document.getElementById('searchInput').value);
+});
+
+document.getElementById('btnFilterUnavailable').addEventListener('click', () => {
+  materialFilter = materialFilter === 2 ? 0 : 2;
+  document.getElementById('btnFilterUnavailable').classList.toggle('active', materialFilter === 2);
+  document.getElementById('btnFilterNoMaterial').classList.toggle('active', false);
+  filterAndRenderHistory(document.getElementById('searchInput').value);
+});
+
 function filterAndRenderHistory(query) {
   const q = query.toLowerCase();
-  const filtered = q
+  let filtered = q
     ? allRecords.filter(r =>
         (r.teacher_en || '').toLowerCase().includes(q) ||
         (r.teacher_ja || '').includes(q) ||
         (r.lesson_type || '').includes(q) ||
-        (r.lesson_lang || '').includes(q)
+        (r.lesson_lang || '').includes(q) ||
+        (r.material_title || '').toLowerCase().includes(q) ||
+        (r.material_title_ja || '').includes(q)
       )
     : allRecords;
+  if (materialFilter === 1) filtered = filtered.filter(r => !r.material_title && !r.material_unavailable);
+  if (materialFilter === 2) filtered = filtered.filter(r => r.material_unavailable);
 
   const list = document.getElementById('historyList');
   if (filtered.length === 0) {
@@ -314,18 +360,40 @@ function filterAndRenderHistory(query) {
   list.innerHTML = filtered.map(r => {
     const dt = formatDatetime(r.timestamp);
     const dur = r.duration_min != null ? `${r.duration_min}分` : '—';
+    const materialEl = r.material_title
+      ? `<div class="hi-material">${escapeHtml(r.material_title)}</div>`
+      : r.material_unavailable
+        ? `<div class="hi-unavailable">取得不可 <button class="btn-undo" data-ts="${escapeHtml(r.timestamp)}">元に戻す</button></div>`
+        : `<div class="hi-material-link"><a href="${r.lesson_booking_url || 'https://eikaiwa.dmm.com/app/'}" target="_blank">教材名を取得</a> <button class="btn-unavailable" data-ts="${escapeHtml(r.timestamp)}">×</button></div>`;
     return `<div class="history-item">
       <div>
         <div class="hi-datetime">${dt}</div>
         <div class="hi-lesson">${escapeHtml(r.lesson_type || r.lesson_lang) || '—'}</div>
+        ${materialEl}
       </div>
       <div>
         <div class="hi-teacher">${escapeHtml(r.teacher_en) || '—'}</div>
         <div class="hi-country">${escapeHtml(r.teacher_country)}</div>
       </div>
-      <div class="hi-duration">${dur}</div>
+      <div>
+        <div class="hi-duration">${dur}</div>
+        ${r.note_url ? `<div class="hi-note"><a href="https://eikaiwa.dmm.com${r.note_url}" target="_blank">Note</a></div>` : ''}
+      </div>
     </div>`;
   }).join('');
+
+  // 取得不可ボタンのイベント委譲
+  list.addEventListener('click', async e => {
+    const unavailBtn = e.target.closest('.btn-unavailable');
+    const undoBtn = e.target.closest('.btn-undo');
+    if (unavailBtn) {
+      await sendMsg({ type: 'SET_MATERIAL_UNAVAILABLE', timestamp: unavailBtn.dataset.ts, unavailable: true });
+      await renderHistory();
+    } else if (undoBtn) {
+      await sendMsg({ type: 'SET_MATERIAL_UNAVAILABLE', timestamp: undoBtn.dataset.ts, unavailable: false });
+      await renderHistory();
+    }
+  }, { once: true });
 }
 
 // ---- エクスポート ----
@@ -339,8 +407,32 @@ document.getElementById('btnExport').addEventListener('click', async () => {
   const a = document.createElement('a');
   a.href = url;
   a.download = `dmm-history-${toDateStr(new Date())}.json`;
+  document.body.appendChild(a);
   a.click();
-  URL.revokeObjectURL(url);
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+});
+
+// ---- 一括取得 ----
+document.getElementById('btnBatch').addEventListener('click', async () => {
+  const btn = document.getElementById('btnBatch');
+  const progressEl = document.getElementById('batchProgress');
+  if (btn.textContent === '停止') {
+    await sendMsg({ type: 'STOP_BATCH_FETCH' });
+    btn.textContent = '教材名を一括取得';
+    progressEl.textContent = '';
+    return;
+  }
+  btn.textContent = '停止';
+  progressEl.textContent = '開始中...';
+  const res = await sendMsg({ type: 'START_BATCH_FETCH' });
+  btn.textContent = '教材名を一括取得';
+  if (res.ok) {
+    progressEl.textContent = `完了: ${res.done}/${res.total}`;
+    renderHistory();
+  } else {
+    progressEl.textContent = res.error === 'already_running' ? '実行中です' : `エラー: ${res.error}`;
+  }
 });
 
 // ---- 消去 ----
@@ -402,7 +494,7 @@ function formatDatetime(ts) {
   if (!ts) return '—';
   const d = new Date(ts.replace('T', ' '));
   const days = ['日','月','火','水','木','金','土'];
-  return `${d.getMonth()+1}/${d.getDate()}(${days[d.getDay()]}) ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+  return `${d.getFullYear()}/${d.getMonth()+1}/${d.getDate()}(${days[d.getDay()]}) ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
 }
 
 // ============================================================

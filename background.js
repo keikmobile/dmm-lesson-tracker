@@ -13,7 +13,15 @@ const DELAY_MS = 400; // 月ごとのウェイト
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg.type === 'START_SCRAPE') {
     startScrape(msg.fromMonth, msg.toMonth)
-      .then(result => sendResponse({ ok: true, ...result }))
+      .then(result => {
+        sendResponse({ ok: true, ...result });
+        // スクレイプ完了後、新規追加分のみ教材名を取得
+        const newPending = (result.newRecords || []).filter(r => r.lesson_booking_url);
+        if (newPending.length > 0 && !batchRunning) {
+          batchRunning = true;
+          batchFetchMaterials(newPending).finally(() => { batchRunning = false; });
+        }
+      })
       .catch(err => sendResponse({ ok: false, error: err.message }));
     return true; // 非同期レスポンス
   }
@@ -47,6 +55,12 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     });
     return true;
   }
+  if (msg.type === 'SET_MATERIAL_UNAVAILABLE') {
+    setMaterialUnavailable(msg.timestamp, msg.unavailable)
+      .then(() => sendResponse({ ok: true }))
+      .catch(err => sendResponse({ ok: false, error: err.message }));
+    return true;
+  }
 });
 
 // ------------------------------------------------------------
@@ -58,14 +72,21 @@ async function startScrape(fromMonth, toMonth) {
   let totalAdded = 0;
   let totalSkipped = 0;
   const warnings = [];
+  const totalNewRecords = [];
 
-  for (const month of months) {
+  const total = months.length;
+  chrome.action.setBadgeBackgroundColor({ color: '#d62b2b' });
+
+  for (const [idx, month] of months.entries()) {
+    // バッジに進捗を表示（例: 3/12）
+    chrome.action.setBadgeText({ text: `${idx}/${total}` });
+
     // 進捗を popup に通知
     chrome.runtime.sendMessage({
       type: 'SCRAPE_PROGRESS',
       month,
-      done: totalAdded + totalSkipped,
-      total: months.length
+      done: idx,
+      total
     }).catch(() => {}); // popup が閉じていても無視
 
     // --- 1ページ目を取得して総ページ数を確認 ---
@@ -107,16 +128,18 @@ async function startScrape(fromMonth, toMonth) {
     const check = sanityCheck(allRecords, month);
     if (check.warnings.length) warnings.push(...check.warnings);
 
-    const { added, skipped } = await mergeRecords(allRecords);
+    const { added, skipped, addedRecords } = await mergeRecords(allRecords);
     totalAdded += added;
     totalSkipped += skipped;
+    totalNewRecords.push(...addedRecords);
 
     await sleep(DELAY_MS);
   }
 
   await chrome.storage.local.set({ [LAST_SCRAPED_KEY]: new Date().toISOString() });
+  chrome.action.setBadgeText({ text: '' });
 
-  return { added: totalAdded, skipped: totalSkipped, warnings };
+  return { added: totalAdded, skipped: totalSkipped, warnings, newRecords: totalNewRecords };
 }
 
 // ------------------------------------------------------------
@@ -201,6 +224,10 @@ function parseContentBlock(block, month) {
   const noteMatch = block.match(/href="(\/lesson\/note\/[^"]+)"/);
   const note_url = noteMatch ? noteMatch[1] : null;
 
+  // --- レッスンページURL（/app/lesson-booking/p-XXXX）---
+  const lessonBtnMatch = block.match(/href="(https:\/\/eikaiwa\.dmm\.com\/app\/lesson-booking\/[^"]+)"/);
+  const lesson_booking_url = lessonBtnMatch ? lessonBtnMatch[1] : null;
+
   // --- 講師情報 ---
   // <dt id="en">Anna Marie</dt>
   const teacherEnMatch = block.match(/<dt[^>]*id="en"[^>]*>\s*([\s\S]*?)\s*<\/dt>/);
@@ -237,6 +264,7 @@ function parseContentBlock(block, month) {
     lesson_type,
     duration_min,
     note_url,
+    lesson_booking_url,
     month
   };
 }
@@ -298,10 +326,12 @@ async function mergeRecords(newRecords) {
   const existingMap = new Map(existing.map(r => [`${r.source}_${r.timestamp}`, r]));
 
   let added = 0, skipped = 0;
+  const addedRecords = [];
   for (const rec of newRecords) {
     const key = `${rec.source}_${rec.timestamp}`;
     if (!existingMap.has(key)) {
       existingMap.set(key, rec);
+      addedRecords.push(rec);
       added++;
     } else {
       // フィールド追加時の上書き（同一ソース・timestampなら新データで更新）
@@ -312,7 +342,7 @@ async function mergeRecords(newRecords) {
 
   const merged = [...existingMap.values()].sort((a, b) => b.timestamp.localeCompare(a.timestamp));
   await chrome.storage.local.set({ [STORAGE_KEY]: merged });
-  return { added, skipped };
+  return { added, skipped, addedRecords };
 }
 
 async function importJson(records) {
@@ -389,6 +419,17 @@ async function getStats() {
     .sort((a, b) => b[1] - a[1]).slice(0, 8)
     .map(([name, count]) => ({ name, count }));
 
+  // 教材ランキング TOP15
+  const materialCount = {};
+  records.forEach(r => {
+    if (r.material_title) materialCount[r.material_title] = (materialCount[r.material_title] || 0) + 1;
+  });
+  const materialRank = Object.entries(materialCount)
+    .sort((a, b) => b[1] - a[1]).slice(0, 15)
+    .map(([name, count]) => ({ name, count }));
+
+  const materialTotal = records.filter(r => r.material_title).length;
+
   return {
     totalLessons,
     monthCount,
@@ -399,7 +440,9 @@ async function getStats() {
     typeRank,
     timeSlots,
     byMonth,
-    countryRank
+    countryRank,
+    materialRank,
+    materialTotal
   };
 }
 
@@ -427,4 +470,219 @@ function sanityCheck(records, month) {
 // ------------------------------------------------------------
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// ============================================================
+// 教材名取得（content-material.js から呼ばれる）
+// ============================================================
+
+// 一括取得: タブID → { resolve, timeout } のマップ
+const batchPendingTabs = new Map();
+let batchRunning = false;
+
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg.type === 'FETCH_MATERIAL') {
+    const tabId = sender.tab?.id;
+    fetchMaterial(msg.callBookingId, msg.accessToken, msg.domTitle || null, msg.domTitleJa || null)
+      .then(result => {
+        sendResponse({ ok: true, ...result });
+        // skipped（LessonHeader未ロード）の場合はタブを閉じず、リトライを待つ
+        if (result.skipped) return;
+        if (tabId != null && batchPendingTabs.has(tabId)) {
+          const { resolve, timeout } = batchPendingTabs.get(tabId);
+          clearTimeout(timeout);
+          batchPendingTabs.delete(tabId);
+          setTimeout(() => chrome.tabs.remove(tabId, () => {}), 500);
+          resolve(result);
+        }
+      })
+      .catch(err => {
+        sendResponse({ ok: false, error: err.message });
+        if (tabId != null && batchPendingTabs.has(tabId)) {
+          const { resolve, timeout } = batchPendingTabs.get(tabId);
+          clearTimeout(timeout);
+          batchPendingTabs.delete(tabId);
+          setTimeout(() => chrome.tabs.remove(tabId, () => {}), 500);
+          resolve({ skipped: true, reason: err.message });
+        }
+      });
+    return true;
+  }
+});
+
+chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  if (msg.type === 'START_BATCH_FETCH') {
+    if (batchRunning) { sendResponse({ ok: false, error: 'already_running' }); return; }
+    batchRunning = true;
+    batchFetchMaterials()
+      .then(result => sendResponse({ ok: true, ...result }))
+      .catch(err => sendResponse({ ok: false, error: err.message }))
+      .finally(() => { batchRunning = false; });
+    return true;
+  }
+  if (msg.type === 'STOP_BATCH_FETCH') {
+    batchRunning = false;
+    sendResponse({ ok: true });
+  }
+});
+
+/**
+ * callBookingId から教材名を取得し、対応するストレージレコードを更新する
+ *
+ * ストレージキー: 'dmm_history'（chrome.storage.local）
+ * レコード突合キー: timestamp（JST）かつ source === 'dmm'
+ * 追加フィールド: material_title（英語）, material_title_ja（日本語）
+ *
+ * timestamp の形式: "2026-03-29T10:00:00"（JST、秒まで）
+ * combined API の time.min 形式: "2026-03-29T01:00:00Z"（UTC）→ JST変換が必要
+ */
+async function fetchMaterial(callBookingId, accessToken, domTitle = null, domTitleJa = null) {
+  const res = await fetch(
+    'https://api.engoo.com/api/lesson_bookings/' + callBookingId + '/combined',
+    {
+      headers: {
+        'Authorization': 'Bearer ' + accessToken,
+        'Accept': 'application/json',
+      },
+    }
+  );
+  if (!res.ok) throw new Error('combined API: HTTP ' + res.status);
+
+  const data = await res.json();
+  if (data.error) throw new Error('combined API: ' + (data.error.detail || data.error));
+
+  // time.min (UTC) → JST timestamp（ストレージの timestamp と同形式）
+  const timeMin = data.data?.time?.min || data.data?.slot_time_ranges?.[0]?.min;
+  if (!timeMin) {
+    console.log('[fetchMaterial] skipped: time.min not found', { callBookingId });
+    return { skipped: true, reason: 'time.min not found' };
+  }
+
+  const jstTimestamp = utcToJstTimestamp(timeMin);
+
+  // DOM から取得済みの場合はそれを優先。なければ references から LessonHeader を探す
+  let materialTitle = domTitle;
+  let materialTitleJa = domTitleJa;
+
+  if (!materialTitle) {
+    // references はトップレベルフィールド（data の中ではない点に注意）
+    const refs = data.references || {};
+    for (const ref of Object.values(refs)) {
+      if (ref._type === 'LessonHeader' && ref.title_text && ref.title_text.text) {
+        materialTitle = ref.title_text.text.trim();
+        const translations = ref.title_text.text_translations || [];
+        const ja = translations.find(t => t.language === 'ja');
+        materialTitleJa = ja ? ja.translation.trim() : null;
+        break;
+      }
+    }
+  }
+
+  // ストレージの既存レコードと突合して更新
+  const stored = await new Promise(resolve =>
+    chrome.storage.local.get(STORAGE_KEY, resolve)
+  );
+  const history = stored[STORAGE_KEY] || [];
+  let updated = 0;
+
+  // 教材名が取れなかった場合はリトライ可能な skipped として返す（自動マークしない）
+  if (!materialTitle) {
+    console.log('[fetchMaterial] skipped: LessonHeader not found', { callBookingId, jstTimestamp });
+    return { skipped: true, reason: 'LessonHeader not found', jstTimestamp };
+  }
+
+  const newHistory = history.map(record => {
+    if (record.timestamp === jstTimestamp && record.source === 'dmm') {
+      updated++;
+      return { ...record, material_title: materialTitle, material_title_ja: materialTitleJa };
+    }
+    return record;
+  });
+
+  if (updated === 0) {
+    console.log('[fetchMaterial] skipped: no matching record in storage', { callBookingId, jstTimestamp });
+  }
+  if (updated > 0) {
+    await new Promise(resolve =>
+      chrome.storage.local.set({ [STORAGE_KEY]: newHistory }, resolve)
+    );
+  }
+
+  return { materialTitle, materialTitleJa, jstTimestamp, updated };
+}
+
+/**
+ * UTC ISO文字列 → JST timestamp文字列（ストレージの timestamp と同形式）
+ * 例: "2026-03-29T01:00:00Z" → "2026-03-29T10:00:00"
+ */
+function utcToJstTimestamp(utcStr) {
+  const d = new Date(utcStr);
+  const jst = new Date(d.getTime() + 9 * 60 * 60 * 1000);
+  const pad = n => String(n).padStart(2, '0');
+  return jst.getUTCFullYear() + '-'
+    + pad(jst.getUTCMonth() + 1) + '-'
+    + pad(jst.getUTCDate()) + 'T'
+    + pad(jst.getUTCHours()) + ':'
+    + pad(jst.getUTCMinutes()) + ':'
+    + pad(jst.getUTCSeconds());
+}
+
+async function setMaterialUnavailable(timestamp, unavailable) {
+  const stored = await new Promise(resolve => chrome.storage.local.get(STORAGE_KEY, resolve));
+  const history = stored[STORAGE_KEY] || [];
+  const newHistory = history.map(r => {
+    if (r.timestamp !== timestamp || r.source !== 'dmm') return r;
+    if (unavailable) return { ...r, material_unavailable: true };
+    const { material_unavailable, ...rest } = r;
+    return rest;
+  });
+  await new Promise(resolve => chrome.storage.local.set({ [STORAGE_KEY]: newHistory }, resolve));
+}
+
+// ============================================================
+// 一括教材名取得
+// ============================================================
+
+/**
+ * material_title 未取得かつ lesson_booking_url があるレコードを順番にタブで開き、
+ * Content Script が FETCH_MATERIAL を送信したら自動でタブを閉じて次へ進む
+ */
+async function batchFetchMaterials(targetRecords = null) {
+  let pending;
+  if (targetRecords) {
+    pending = targetRecords.filter(r => !r.material_title && r.lesson_booking_url);
+  } else {
+    const stored = await new Promise(resolve => chrome.storage.local.get(STORAGE_KEY, resolve));
+    const history = stored[STORAGE_KEY] || [];
+    pending = history.filter(r => !r.material_title && r.lesson_booking_url);
+  }
+
+  let done = 0;
+  const total = pending.length;
+
+  for (const record of pending) {
+    if (!batchRunning) break;
+    await openTabAndWait(record.lesson_booking_url);
+    done++;
+    chrome.runtime.sendMessage({ type: 'BATCH_PROGRESS', done, total }).catch(() => {});
+    await sleep(500);
+  }
+
+  return { done, total };
+}
+
+/**
+ * URL をバックグラウンドタブで開き、FETCH_MATERIAL 完了またはタイムアウトまで待つ
+ */
+function openTabAndWait(url, timeoutMs = 30000) {
+  return new Promise(resolve => {
+    chrome.tabs.create({ url, active: false }, tab => {
+      const timeout = setTimeout(() => {
+        batchPendingTabs.delete(tab.id);
+        chrome.tabs.remove(tab.id, () => {});
+        resolve({ skipped: true, reason: 'timeout' });
+      }, timeoutMs);
+      batchPendingTabs.set(tab.id, { resolve, timeout });
+    });
+  });
 }
