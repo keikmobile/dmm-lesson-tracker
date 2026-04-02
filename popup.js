@@ -16,6 +16,7 @@ chrome.runtime.onMessage.addListener((msg) => {
       renderHistory();
     }
   }
+
 });
 
 // ---- タブ切り替え ----
@@ -378,20 +379,39 @@ function filterAndRenderHistory(query) {
       <div>
         <div class="hi-duration">${dur}</div>
         ${r.note_url ? `<div class="hi-note"><a href="https://eikaiwa.dmm.com${r.note_url}" target="_blank">Note</a></div>` : ''}
+        ${r.lesson_booking_url ? `<div><button class="hi-dl-btn" data-ts="${escapeHtml(r.timestamp)}" data-url="${escapeHtml(r.lesson_booking_url)}" title="録音をダウンロード">🎙</button></div>` : ''}
       </div>
     </div>`;
   }).join('');
 
-  // 取得不可ボタンのイベント委譲
+  // ボタンのイベント委譲
   list.addEventListener('click', async e => {
     const unavailBtn = e.target.closest('.btn-unavailable');
     const undoBtn = e.target.closest('.btn-undo');
+    const dlBtn = e.target.closest('.hi-dl-btn');
     if (unavailBtn) {
       await sendMsg({ type: 'SET_MATERIAL_UNAVAILABLE', timestamp: unavailBtn.dataset.ts, unavailable: true });
       await renderHistory();
     } else if (undoBtn) {
       await sendMsg({ type: 'SET_MATERIAL_UNAVAILABLE', timestamp: undoBtn.dataset.ts, unavailable: false });
       await renderHistory();
+    } else if (dlBtn) {
+      dlBtn.disabled = true;
+      dlBtn.textContent = '⏳';
+      const record = allRecords.find(r => r.timestamp === dlBtn.dataset.ts);
+      const res = await sendMsg({
+        type: 'DOWNLOAD_RECORDINGS',
+        lessonBookingUrl: dlBtn.dataset.url,
+        timestamp: dlBtn.dataset.ts,
+        materialTitle: record?.material_title || null
+      });
+      if (res.ok) {
+        dlBtn.textContent = `✅${res.chunks}`;
+      } else {
+        dlBtn.textContent = '❌';
+        dlBtn.title = res.error;
+        dlBtn.disabled = false;
+      }
     }
   }, { once: true });
 }
