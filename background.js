@@ -61,6 +61,12 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       .catch(err => sendResponse({ ok: false, error: err.message }));
     return true;
   }
+  if (msg.type === 'DOWNLOAD_RECORDINGS') {
+    downloadRecordings(msg.lessonBookingUrl, msg.timestamp, msg.materialTitle)
+      .then(result => sendResponse({ ok: true, ...result }))
+      .catch(err => sendResponse({ ok: false, error: err.message }));
+    return true;
+  }
 });
 
 // ------------------------------------------------------------
@@ -683,6 +689,112 @@ function openTabAndWait(url, timeoutMs = 30000) {
         resolve({ skipped: true, reason: 'timeout' });
       }, timeoutMs);
       batchPendingTabs.set(tab.id, { resolve, timeout });
+    });
+  });
+}
+
+// ============================================================
+// 録音ダウンロード
+// ============================================================
+
+/**
+ * lesson_booking_url をタブで開き、ページの「音声をダウンロード」ボタンを
+ * DOM クリックで自動実行する。ページ側がチャンク結合・Blob化・ダウンロードを行う。
+ *
+ * フロー:
+ *   lesson_booking_url → リダイレクト → /app/calls/full-screen
+ *   → React レンダー待機
+ *   → 「...」メニューボタンをクリック
+ *   → 「音声をダウンロード」ボタンをクリック
+ *   → ページがダウンロードを実行 → タブを閉じる
+ */
+function downloadRecordings(lessonBookingUrl, timestamp, materialTitle) {
+  const dateStr = (timestamp || '').slice(0, 10) || 'unknown';
+  const safeTitle = (materialTitle || '').replace(/[\\/:*?"<>|]/g, '').trim().replace(/\s+/g, '_').slice(0, 60);
+  const filename = safeTitle ? `dmm-lesson-${dateStr}-${safeTitle}.webm` : `dmm-lesson-${dateStr}.webm`;
+
+  return new Promise((resolve, reject) => {
+    let tabId = null;
+    let done = false;
+    let dlTimer = null;
+    let dlListener = null;
+
+    const finish = (ok, value) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      clearTimeout(dlTimer);
+      if (dlListener) chrome.downloads.onCreated.removeListener(dlListener);
+      chrome.tabs.onUpdated.removeListener(onUpdated);
+      if (tabId != null) setTimeout(() => chrome.tabs.remove(tabId, () => {}), 1000);
+      ok ? resolve(value) : reject(new Error(value));
+    };
+
+    const timer = setTimeout(() => finish(false, 'タイムアウト (60s)'), 60000);
+
+    const onUpdated = (id, changeInfo) => {
+      if (id !== tabId) return;
+      const url = changeInfo.url || '';
+      if (!url.includes('/app/calls/full-screen')) return;
+      chrome.tabs.onUpdated.removeListener(onUpdated);
+
+      sleep(2500).then(() => chrome.scripting.executeScript({
+        target: { tabId },
+        world: 'MAIN',
+        args: [filename],
+        func: (filename) => new Promise((res, rej) => {
+          const origClick = HTMLAnchorElement.prototype.click;
+          // blob ダウンロードの <a>.click() を1回だけ横取りしてファイル名を上書き
+          HTMLAnchorElement.prototype.click = function () {
+            if (this.href && this.href.startsWith('blob:') && this.download) {
+              this.download = filename;
+              HTMLAnchorElement.prototype.click = origClick;
+            }
+            return origClick.call(this);
+          };
+
+          const deadline = Date.now() + 20000;
+          let menuTried = false;
+
+          const poll = setInterval(() => {
+            const dlBtns = [...document.querySelectorAll('button,[role="menuitem"],li')]
+              .filter(el => el.textContent.trim().includes('音声をダウンロード'));
+            const dlBtn = dlBtns[dlBtns.length - 1];
+            if (dlBtn) {
+              clearInterval(poll);
+              dlBtn.click();
+              res(true);
+              return;
+            }
+
+            if (!menuTried) {
+              menuTried = true;
+              document.querySelectorAll('button[aria-label="その他のツール"]').forEach(b => b.click());
+            }
+
+            if (Date.now() > deadline) {
+              clearInterval(poll);
+              rej(new Error('ダウンロードボタンが見つかりませんでした'));
+            }
+          }, 300);
+        })
+      })).then(results => {
+        if (!results?.[0]?.result) {
+          finish(false, 'スクリプト実行失敗');
+          return;
+        }
+        dlListener = (item) => {
+          if (!item.url.startsWith('blob:https://eikaiwa.dmm.com')) return;
+          finish(true, { chunks: 1 });
+        };
+        chrome.downloads.onCreated.addListener(dlListener);
+        dlTimer = setTimeout(() => finish(false, 'ダウンロード開始タイムアウト (5分)'), 300000);
+      }).catch(e => finish(false, e.message));
+    };
+
+    chrome.tabs.onUpdated.addListener(onUpdated);
+    chrome.tabs.create({ url: lessonBookingUrl, active: false }, tab => {
+      tabId = tab.id;
     });
   });
 }
