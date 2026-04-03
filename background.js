@@ -710,8 +710,9 @@ function openTabAndWait(url, timeoutMs = 30000) {
  */
 function downloadRecordings(lessonBookingUrl, timestamp, materialTitle) {
   const dateStr = (timestamp || '').slice(0, 16).replace('T', '-').replace(/:/g, '') || 'unknown';
+  const dlDate = new Date().toISOString().slice(0, 10);
   const safeTitle = (materialTitle || '').replace(/[\\/:*?"<>|]/g, '').trim().replace(/\s+/g, '_').slice(0, 60);
-  const filename = safeTitle ? `dmm-lesson-${dateStr}-${safeTitle}.webm` : `dmm-lesson-${dateStr}.webm`;
+  const filename = safeTitle ? `dmm-lesson-${dateStr}-${safeTitle}-dl${dlDate}.webm` : `dmm-lesson-${dateStr}-dl${dlDate}.webm`;
 
   return new Promise((resolve, reject) => {
     let tabId = null;
