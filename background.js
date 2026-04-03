@@ -709,7 +709,7 @@ function openTabAndWait(url, timeoutMs = 30000) {
  *   → ページがダウンロードを実行 → タブを閉じる
  */
 function downloadRecordings(lessonBookingUrl, timestamp, materialTitle) {
-  const dateStr = (timestamp || '').slice(0, 10) || 'unknown';
+  const dateStr = (timestamp || '').slice(0, 16).replace('T', '-').replace(/:/g, '') || 'unknown';
   const safeTitle = (materialTitle || '').replace(/[\\/:*?"<>|]/g, '').trim().replace(/\s+/g, '_').slice(0, 60);
   const filename = safeTitle ? `dmm-lesson-${dateStr}-${safeTitle}.webm` : `dmm-lesson-${dateStr}.webm`;
 

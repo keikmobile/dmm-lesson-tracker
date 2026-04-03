@@ -2,6 +2,8 @@
 // DMM英会話 Lesson Tracker - popup.js
 // ============================================================
 
+const RECORDINGS_START_DATE = '2022-03-23'; // 録音機能の提供開始日
+
 // ---- 進捗リッスン（1回のみ登録）----
 chrome.runtime.onMessage.addListener((msg) => {
   if (msg.type === 'SCRAPE_PROGRESS') {
@@ -379,7 +381,7 @@ function filterAndRenderHistory(query) {
       <div>
         <div class="hi-duration">${dur}</div>
         ${r.note_url ? `<div class="hi-note"><a href="https://eikaiwa.dmm.com${r.note_url}" target="_blank">Note</a></div>` : ''}
-        ${r.lesson_booking_url ? `<div><button class="hi-dl-btn" data-ts="${escapeHtml(r.timestamp)}" data-url="${escapeHtml(r.lesson_booking_url)}" title="録音をダウンロード">🎙</button></div>` : ''}
+        ${r.lesson_booking_url && r.timestamp >= RECORDINGS_START_DATE ? `<div><button class="hi-dl-btn" data-ts="${escapeHtml(r.timestamp)}" data-url="${escapeHtml(r.lesson_booking_url)}" title="録音をダウンロード">🎙</button></div>` : ''}
       </div>
     </div>`;
   }).join('');
